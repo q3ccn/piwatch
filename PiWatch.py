@@ -1,106 +1,83 @@
+# -*- coding: utf-8 -*-
 ### Imports ###################################################################
-
-from picamera.array import PiRGBArray
-from picamera import PiCamera
 
 import time
 import cv2
-import os
+import urllib2
+import numpy as np
 import pygame
 
 
 ### Setup #####################################################################
 
-# Setup the camera
-camera = PiCamera()
-camera.resolution = ( 320, 240 )
-camera.framerate = 32
-camera.rotation =90
-rawCapture = PiRGBArray( camera, size=( 320, 240 ) )
-
-FCounter = 0
-
-pygame.mixer.init()
-pygame.mixer.music.load("Ooo.wav")
+CAMURL = 'http://localhost:8080?action=stream'
 
 
-t_start = time.time()
-t_play = 0
-fps = 0
+def detect_motion():    
+    cap = cv2.VideoCapture()
+    fCounter = 0
+    playLong = 60
+    pygame.mixer.init()
+    pygame.mixer.music.load("/home/pi/piwatch/Ooo.wav")
+    sensitive = 10000
+    preFrame = 0
+   
+    t_play = 0
+    imgBytes = ''    
 
-PREFRAME = None
-PLAYMUSIC = False
-SENSITIVE = 1000
-PLAYLONG= 60
-OUTPATH = '/tmp/face_stream/motion.jpg'
+    stream=urllib2.urlopen(CAMURL)
 
-### Main ######################################################################
+    while True:
+        # Capture frames from the camera
 
-# Capture frames from the camera
-for frame in camera.capture_continuous( rawCapture, format="bgr", use_video_port=True ):
+        imgBytes += stream.read(1024)
+        a = imgBytes.find('\xff\xd8')
+        b = imgBytes.find('\xff\xd9')
+        if a!=-1 and b!=-1:
+            imgRaw = imgBytes[a:b+2]
+            imgBytes= imgBytes[b+2:]
+            #flags = 1 for color image
+            image = cv2.imdecode(np.fromstring(imgRaw, dtype=np.uint8),flags=1)
+                
+            if fCounter % 4 == 3:
 
-    image = frame.array
-  
-    if FCounter % 4 == 3:
+                fCounter = 0
 
-        FCounter = 0
+                gray = cv2.cvtColor( image, cv2.COLOR_BGR2GRAY )
+                gray_blur = cv2.GaussianBlur(gray, (21, 21), 0)      
 
-        
-        gray = cv2.cvtColor( image, cv2.COLOR_BGR2GRAY )
-        gray_blur = cv2.GaussianBlur(gray, (21, 21), 0)      
-
-        if PREFRAME is None:
-            PREFRAME = gray_blur
-        else:
-            imgDelta = cv2.absdiff(PREFRAME,gray_blur)
-            thresh = cv2.threshold(imgDelta,25,255, cv2.THRESH_BINARY)[1]
-            thresh = cv2.dilate(thresh, None, iterations=2)
-            _image, contours, hierarchy = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            for c in contours:
-                if cv2.contourArea(c) < SENSITIVE: # 设置敏感度
-                    continue
+                if preFrame is None:
+                    preFrame = gray_blur
                 else:
-                    #print(cv2.contourArea(c))
-                   
-                    PLAYMUSIC = True
-                    #play Ooo.wav
-                    if pygame.mixer.music.get_busy() != 1:
-                        pygame.mixer.music.play()
-                        t_play = time.time()
-
+                    imgDelta = cv2.absdiff(preFrame,gray_blur)                   
+                    thresh = cv2.threshold(imgDelta,25,255, cv2.THRESH_BINARY)[1]
+                    thresh = cv2.dilate(thresh, None, iterations=2)
                     
-                    #draw a rectangle
-                    minx =  reduce(lambda x:x.min(),map(lambda x:x[:,:,0].min(),contours))
-                    miny =  reduce(lambda x:x.min(),map(lambda x:x[:,:,1].min(),contours))
-                    maxx =  reduce(lambda x:x.max(),map(lambda x:x[:,:,0].max(),contours))
-                    maxy =  reduce(lambda x:x.max(),map(lambda x:x[:,:,1].max(),contours))
+                    contours, hierarchy = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    print 'hello' ,time.time()             
+              
 
-                    cv2.rectangle(image,(minx,miny),(maxx,maxy),(255,255,0),2)
+                    if len(contours) > 0 :
+                        if  reduce(lambda x,y:x+y,map(lambda x:cv2.contourArea(x),contours)) <  sensitive: # 设置敏感度
+                            print 'less'                        
+                        else:
+                            #print(cv2.contourArea(c))
+                            print 'more'                       
+                            #play Ooo.wav
+                            if pygame.mixer.music.get_busy() != 1:
+                                pygame.mixer.music.play(loops=3)
+                                t_play = time.time()                
+                                            
+                    preFrame = gray_blur
+            else:
+                pass
 
+            fCounter += 1
 
-                    break
-            PREFRAME = gray_blur
-    else:
-        pass
+            #stop Ooo.wav after {playLong} sec
+            if pygame.mixer.music.get_busy() == 1 and time.time() - t_play  > playLong :       
+                pygame.mixer.music.stop()
+                t_play = 0       
 
-    FCounter += 1
-
-    #play Ooo.wav for 60 sec
-    if pygame.mixer.music.get_busy() == 1 and time.time() - t_play  > PLAYLONG :
-        PLAYMUSIC = False
-        pygame.mixer.music.stop()
-        t_play = 0
-
-
-
-    # Calculate and show the FPS
-    fps = fps + 1
-    sfps = fps / ( time.time() - t_start )
-    cv2.putText( image, "FPS : " + str( int( sfps ) ), ( 10, 10 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, ( 0, 0, 255 ), 2 )
-
-    cv2.imwrite(OUTPATH, image )
- 
-
-    # Clear the stream in preparation for the next frame
-    rawCapture.truncate( 0 )
+if __name__ == '__main__':
+    detect_motion()
